@@ -1,4 +1,3 @@
-
 local _version = "1.6.66"
 
 if not game:IsLoaded() then
