@@ -358,27 +358,14 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
--- Delay creation of UI until character exists
-local ScreenGui
-task.spawn(function()
-    if LocalPlayer.Character then
-        task.wait(1)
-    else
-        LocalPlayer.CharacterAdded:Wait()
-        task.wait(0.5)
-    end
-    
-    if LocalPlayer.PlayerGui:FindFirstChild("MobileAimbotGui") then
-        LocalPlayer.PlayerGui.MobileAimbotGui:Destroy()
-    end
-    
-    ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "MobileAimbotGui"
-    ScreenGui.ResetOnSpawn = false
-    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    
-    -- ... rest of UI code
-end)
+if LocalPlayer.PlayerGui:FindFirstChild("MobileAimbotGui") then
+    LocalPlayer.PlayerGui.MobileAimbotGui:Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MobileAimbotGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
 local FOVThemeColor = _G.FOVThemeColor or Color3.fromRGB(255, 255, 255)
 
@@ -752,86 +739,175 @@ local function getTargetCFrame()
 end
 
 task.spawn(function()
-   -- รอให้ตัวละครเกิด
-    if not LocalPlayer.Character then
-        LocalPlayer.CharacterAdded:Wait()
+    -- ==========================================
+    -- WAIT FOR LOCAL PLAYER CHARACTER
+    -- ==========================================
+
+    local Character = LocalPlayer.Character
+
+    if not Character then
+        Character = LocalPlayer.CharacterAdded:Wait()
     end
-    
+
+    -- รอ Character ให้พร้อมจริง ๆ
+    local Humanoid = Character:WaitForChild("Humanoid")
+    local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+    -- รอจน Character เข้า Workspace
+    repeat
+        task.wait()
+    until Character:IsDescendantOf(workspace)
+
+    -- รอจนตัวละครมีชีวิต
+    repeat
+        task.wait()
+    until Humanoid.Parent
+        and RootPart.Parent
+        and Humanoid.Health > 0
+
+    -- ==========================================
+    -- GET MOUSE
+    -- ==========================================
+
     local success, Mouse = pcall(function()
         return LocalPlayer:GetMouse()
     end)
-    if not success or not Mouse then return end
-    
+
+    if not success or not Mouse then
+        return
+    end
+
+    -- ==========================================
+    -- MOUSE INDEX
+    -- ==========================================
 
     local oldIndex
+
     oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, idx)
-        if getgenv().SkillRedirectEnabled and self == Mouse then
-            if idx == "Hit" or idx == "Target" or idx == "X" or idx == "Y" then
+
+        if getgenv().SkillRedirectEnabled
+            and self == Mouse then
+
+            if idx == "Hit"
+                or idx == "Target"
+                or idx == "X"
+                or idx == "Y" then
+
                 local rootPart = getTargetCFrame()
+
                 if rootPart then
-                    if idx == "Hit" then 
+
+                    if idx == "Hit" then
                         return rootPart.CFrame
-                    elseif idx == "Target" then 
+
+                    elseif idx == "Target" then
                         return rootPart
-                    elseif idx == "X" or idx == "Y" then 
-                        local screenPoint = Camera:WorldToScreenPoint(rootPart.Position)
+
+                    elseif idx == "X" or idx == "Y" then
+
+                        local screenPoint =
+                            Camera:WorldToScreenPoint(rootPart.Position)
+
                         return screenPoint[idx]
                     end
                 end
             end
         end
+
         return oldIndex(self, idx)
     end))
 
+    -- ==========================================
+    -- NAMECALL
+    -- ==========================================
+
     local oldNamecall
+
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+
         local method = getnamecallmethod()
 
-        if method == "FireServer" or method == "InvokeServer" then
+        if method == "FireServer"
+            or method == "InvokeServer" then
+
             local name = self and self.Name
-            
+
+            -- ==========================================
+            -- IGNORED REMOTES
+            -- ==========================================
+
             if name then
-                -- เช็คชื่อในตาราง Ignored ทันที
+
                 if ignoredRemotes[name] then
                     return oldNamecall(self, ...)
                 end
 
-                -- เช็คคำต้องห้าม
+                -- ==========================================
+                -- BLOCKED KEYWORDS
+                -- ==========================================
+
                 for _, keyword in ipairs(blockedKeywords) do
+
                     if name:find(keyword) then
                         return oldNamecall(self, ...)
                     end
+
                 end
             end
 
-            -- เช็ค Parent (เช่น โฟลเดอร์ Clock)
+            -- ==========================================
+            -- CHECK PARENT
+            -- ==========================================
+
             local parent = self and self.Parent
-            if parent and (parent.Name == "Clock" or parent.Name == "Telemetry" or parent.Name == "Remotes") then
-                if parent.Name == "Clock" or (parent.Parent and parent.Parent.Name == "Clock") then
+
+            if parent
+                and (
+                    parent.Name == "Clock"
+                    or parent.Name == "Telemetry"
+                    or parent.Name == "Remotes"
+                ) then
+
+                if parent.Name == "Clock"
+                    or (parent.Parent and parent.Parent.Name == "Clock") then
+
                     return oldNamecall(self, ...)
                 end
             end
 
+            -- ==========================================
+            -- SKILL REDIRECT
+            -- ==========================================
+
             if getgenv().SkillRedirectEnabled then
+
                 local rootPart = getTargetCFrame()
+
                 if rootPart then
+
                     local targetCFrame = rootPart.CFrame
                     local targetPos = targetCFrame.Position
+
                     local args = { ... }
                     local modified = false
-                    
+
                     for i = 1, #args do
+
                         local arg = args[i]
                         local argType = typeof(arg)
+
                         if argType == "CFrame" then
+
                             args[i] = targetCFrame
                             modified = true
+
                         elseif argType == "Vector3" then
+
                             args[i] = targetPos
                             modified = true
                         end
                     end
-                    
+
                     if modified then
                         return oldNamecall(self, unpack(args))
                     end
@@ -841,6 +917,7 @@ task.spawn(function()
 
         return oldNamecall(self, ...)
     end))
+
 end)
 
 
