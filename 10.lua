@@ -2929,17 +2929,18 @@ GeneralTab:Toggle({
         SetAutoRaceAbility(state)
     end,
 })
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
--- จัดเก็บสถานะและฟังก์ชันกลาง
 local IceWalkConfig = {
     GiantFloor = nil,
     FloorConnection = nil,
-    FloorRunning = false
+    FloorRunning = false,
+    LastPosition = nil,
+    LastSeaLevel = nil,
+    LastState = nil
 }
 
 local IceWalkUtils = {}
@@ -2949,28 +2950,44 @@ function IceWalkUtils.Cleanup()
         IceWalkConfig.FloorConnection:Disconnect()
         IceWalkConfig.FloorConnection = nil
     end
+
     if IceWalkConfig.GiantFloor then
         IceWalkConfig.GiantFloor:Destroy()
         IceWalkConfig.GiantFloor = nil
     end
+
+    IceWalkConfig.LastPosition = nil
+    IceWalkConfig.LastSeaLevel = nil
+    IceWalkConfig.LastState = nil
+
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
+
     if hum then
         hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
     end
 end
 
 function IceWalkUtils.GetOrCreateFloor()
-    if not IceWalkConfig.GiantFloor or not IceWalkConfig.GiantFloor.Parent then
+    if not IceWalkConfig.GiantFloor
+        or not IceWalkConfig.GiantFloor.Parent then
+
         local part = Instance.new("Part")
-        part.Size = Vector3.new(1000, 1, 1000) -- ขยายขนาดให้กว้างขึ้นเล็กน้อยเพื่อรองรับการพุ่ง/วาปไม่ให้ตก
+        part.Name = "IceWalkFloor"
+        part.Size = Vector3.new(1000, 1, 1000)
         part.Anchored = true
         part.CanCollide = true
-        part.Transparency = 1 
+        part.CanTouch = false
+        part.CanQuery = false
+        part.CastShadow = false
+        part.Transparency = 1
         part.Material = Enum.Material.SmoothPlastic
         part.Parent = Workspace
+
         IceWalkConfig.GiantFloor = part
     end
+
     return IceWalkConfig.GiantFloor
 end
 
@@ -2979,6 +2996,7 @@ GeneralTab:Toggle({
     Desc = "Does not sink; Soru and warping work normally.",
     Flag = "IceWalk",
     Value = false,
+
     Callback = function(state)
         IceWalkConfig.FloorRunning = state
 
@@ -2988,54 +3006,137 @@ GeneralTab:Toggle({
         end
 
         local floorPart = IceWalkUtils.GetOrCreateFloor()
+
         local raycastParams = RaycastParams.new()
         raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 
-        IceWalkConfig.FloorConnection = RunService.RenderStepped:Connect(function(dt)
-            if not IceWalkConfig.FloorRunning then return end
+        -- อัปเดตประมาณ 20 ครั้ง/วินาที แทนทุกเฟรม
+        local UPDATE_RATE = 0.05
+        local elapsed = 0
 
-            local character = LocalPlayer.Character
-            if not character or not character:FindFirstChild("HumanoidRootPart") then 
-                if floorPart.Parent then floorPart.Parent = nil end
-                return 
-            end
+        IceWalkConfig.FloorConnection =
+            RunService.Heartbeat:Connect(function(dt)
 
-            if floorPart.Parent ~= Workspace then
-                floorPart.Parent = Workspace
-            end
+                if not IceWalkConfig.FloorRunning then
+                    return
+                end
 
-            local rootPart = character.HumanoidRootPart
-            local hum = character:FindFirstChildOfClass("Humanoid")
+                elapsed = elapsed + dt
 
-            raycastParams.FilterDescendantsInstances = {character}
-            local seaLevel = - 2.8
+                if elapsed < UPDATE_RATE then
+                    return
+                end
 
-            -- ยิง Raycast หาผิวน้ำ
-            local rayResult = Workspace:Raycast(rootPart.Position + Vector3.new(0, 5, 0), Vector3.new(0, -50, 0), raycastParams)
-            if rayResult and rayResult.Material == Enum.Material.Water then
-                seaLevel = rayResult.Position.Y
-            end
+                elapsed = 0
 
-            -- ติดตามผู้เล่นทันทีเมื่อมีการวาปหรือพุ่ง (Lerp เร็วขึ้นเพื่อไม่ให้ดีเลย์)
-            local targetPos = Vector3.new(rootPart.Position.X, seaLevel - 2, rootPart.Position.Z)
-            floorPart.Position = floorPart.Position:Lerp(targetPos, 0.8)
+                local character = LocalPlayer.Character
 
-            -- บังคับป้องกันการจมน้ำและสถานะว่ายน้ำเด็ดขาด
-            if hum then
-                hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
-                hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-                
-                if hum:GetState() == Enum.HumanoidStateType.Swimming or rootPart.Position.Y < (seaLevel + 3.5) then
-                    hum:ChangeState(Enum.HumanoidStateType.Running)
-                    -- ดึงตัวละครขึ้นมาเหนือผิวน้ำทันทีถ้าหลุดลงไป
+                if not character then
+                    return
+                end
+
+                local rootPart =
+                    character:FindFirstChild("HumanoidRootPart")
+
+                local hum =
+                    character:FindFirstChildOfClass("Humanoid")
+
+                if not rootPart or not hum then
+                    return
+                end
+
+                if floorPart.Parent ~= Workspace then
+                    floorPart.Parent = Workspace
+                end
+
+                raycastParams.FilterDescendantsInstances = { character }
+
+                local seaLevel = -2.8
+
+                -- Raycast เฉพาะตามช่วงเวลา ไม่ใช่ทุก Frame
+                local rayResult = Workspace:Raycast(
+                    rootPart.Position + Vector3.new(0, 5, 0),
+                    Vector3.new(0, -50, 0),
+                    raycastParams
+                )
+
+                if rayResult
+                    and rayResult.Material == Enum.Material.Water then
+
+                    seaLevel = rayResult.Position.Y
+                end
+
+                -- ถ้าระดับน้ำไม่เปลี่ยน ไม่ต้องคำนวณซ้ำ
+                if IceWalkConfig.LastSeaLevel ~= seaLevel then
+                    IceWalkConfig.LastSeaLevel = seaLevel
+                end
+
+                local currentPos = rootPart.Position
+
+                -- ตรวจจับการเคลื่อนที่ / วาร์ป
+                local moved = false
+
+                if IceWalkConfig.LastPosition then
+                    local distance =
+                        (currentPos - IceWalkConfig.LastPosition).Magnitude
+
+                    moved = distance > 1
+                else
+                    moved = true
+                end
+
+                IceWalkConfig.LastPosition = currentPos
+
+                if moved or not floorPart.Parent then
+                    local targetPos = Vector3.new(
+                        currentPos.X,
+                        seaLevel - 2,
+                        currentPos.Z
+                    )
+
+                    -- ตรงทันที ลดภาระจาก Lerp ทุกเฟรม
+                    floorPart.Position = targetPos
+                end
+
+                -- ตั้งค่า State แค่ครั้งเดียว
+                if IceWalkConfig.LastState ~= false then
+                    hum:SetStateEnabled(
+                        Enum.HumanoidStateType.Swimming,
+                        false
+                    )
+
+                    hum:SetStateEnabled(
+                        Enum.HumanoidStateType.FallingDown,
+                        false
+                    )
+
+                    IceWalkConfig.LastState = false
+                end
+
+                -- ป้องกันตกน้ำ
+                if rootPart.Position.Y < seaLevel + 3.5 then
+
+                    if hum:GetState()
+                        == Enum.HumanoidStateType.Swimming then
+
+                        hum:ChangeState(
+                            Enum.HumanoidStateType.Running
+                        )
+                    end
+
                     if rootPart.Position.Y < seaLevel then
-                        rootPart.CFrame = CFrame.new(rootPart.Position.X, seaLevel + 4, rootPart.Position.Z)
+                        rootPart.CFrame = CFrame.new(
+                            currentPos.X,
+                            seaLevel + 4,
+                            currentPos.Z
+                        )
                     end
                 end
-            end
-        end)
+            end)
     end,
 })
+
+
 
 GeneralTab:Divider() 
 
