@@ -358,14 +358,27 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
-if LocalPlayer.PlayerGui:FindFirstChild("MobileAimbotGui") then
-    LocalPlayer.PlayerGui.MobileAimbotGui:Destroy()
-end
-
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MobileAimbotGui"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+-- Delay creation of UI until character exists
+local ScreenGui
+task.spawn(function()
+    if LocalPlayer.Character then
+        task.wait(1)
+    else
+        LocalPlayer.CharacterAdded:Wait()
+        task.wait(0.5)
+    end
+    
+    if LocalPlayer.PlayerGui:FindFirstChild("MobileAimbotGui") then
+        LocalPlayer.PlayerGui.MobileAimbotGui:Destroy()
+    end
+    
+    ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "MobileAimbotGui"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    
+    -- ... rest of UI code
+end)
 
 local FOVThemeColor = _G.FOVThemeColor or Color3.fromRGB(255, 255, 255)
 
@@ -739,12 +752,16 @@ local function getTargetCFrame()
 end
 
 task.spawn(function()
-    task.wait(5)
-
+   -- รอให้ตัวละครเกิด
+    if not LocalPlayer.Character then
+        LocalPlayer.CharacterAdded:Wait()
+    end
+    
     local success, Mouse = pcall(function()
         return LocalPlayer:GetMouse()
     end)
     if not success or not Mouse then return end
+    
 
     local oldIndex
     oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, idx)
